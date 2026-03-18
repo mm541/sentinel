@@ -78,16 +78,32 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+
 fn collect_hardware_manifest() -> HardwareManifest {
     let motherboard_serial = sys_info::get_motherboard_serial();
     let cpu_timing_signature = sys_info::get_robust_cpu_timing_signature(100);
     let ram_serials = sys_info::get_ram_serials();
     let drive_serials = sys_info::get_drive_serials();
     let gpu_uuids = sys_info::get_gpu_uuids();
-    let mac_addresses = sys_info::get_mac_addresses();
+    let mut mac_addresses = sys_info::get_mac_addresses();
+    
+    // Sort macs for deterministic hashing regardless of enumeration order
+    mac_addresses.sort();
+
+    // Generate a deterministic machine ID based tightly on immutable hardware
+    let mut hasher = DefaultHasher::new();
+    if let Some(ref serial) = motherboard_serial {
+        serial.hash(&mut hasher);
+    }
+    cpu_timing_signature.hash(&mut hasher);
+    for mac in &mac_addresses {
+        mac.hash(&mut hasher);
+    }
+    let machine_id = format!("HW-{:016X}", hasher.finish());
 
     HardwareManifest {
-        machine_id: gethostname(),
+        machine_id,
         motherboard_serial,
         cpu_timing_signature,
         ram_serials,
@@ -183,11 +199,4 @@ fn print_collection_diff(label: &str, collection: &manifest::CollectionDiff) {
             println!("      {} {}", "+".green().bold(), added.green());
         }
     }
-}
-
-fn gethostname() -> String {
-    std::fs::read_to_string("/etc/hostname")
-        .unwrap_or_else(|_| "unknown-host".to_string())
-        .trim()
-        .to_string()
 }
