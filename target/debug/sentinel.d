@@ -1,0 +1,1 @@
+/home/azam/personal/fun/sentinel/target/debug/sentinel: /home/azam/personal/fun/sentinel/src/main.rs /home/azam/personal/fun/sentinel/src/manifest.rs /home/azam/personal/fun/sentinel/src/sys_info/linux.rs /home/azam/personal/fun/sentinel/src/sys_info/mod.rs
