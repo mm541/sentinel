@@ -17,12 +17,12 @@ flowchart LR
     A[Baseline Manifest] --> C{ManifestDiff.compare}
     B[Live Scan Results] --> C
 
-    C --> D[Missing Components (-)]
-    C --> E[Added Components (+)]
-    C --> F[Modified Strings (M)]
-    C --> G[Identical Sets (OK)]
+    C --> D["Missing Components (-)"]
+    C --> E["Added Components (+)"]
+    C --> F["Modified Strings (M)"]
+    C --> G["Identical Sets (OK)"]
 
-    D --> H[Alert: Hardware Stripped]
-    E --> I[Alert: Rogue USB/PCI inserted]
-    F --> J[Alert: Spoofing Attempt]
+    D --> H["Alert: Hardware Stripped"]
+    E --> I["Alert: Rogue USB/PCI inserted"]
+    F --> J["Alert: Spoofing Attempt"]
 ```
