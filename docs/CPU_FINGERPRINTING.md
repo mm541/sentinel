@@ -12,24 +12,7 @@ However, no two physical chips come out of the semiconductor fab exactly identic
 
 Sentinel measures these tiny execution time discrepancies by chaining thousands of dependent instructions and timing them down to the cycle:
 
-```mermaid
-sequenceDiagram
-    participant Main as Execution Loop
-    participant ALU as Integer Multiplier
-    participant DIV as Hardware Divider
-    participant FPU as Floating Point Unit
-
-    Main->>ALU: 1000 chained IMUL instructions
-    ALU-->>Main: Elapsed RDTSC Cycles (A)
-
-    Main->>DIV: 1000 chained IDIV instructions
-    DIV-->>Main: Elapsed RDTSC Cycles (B)
-
-    Main->>FPU: 1000 chained FMUL/FADD instructions
-    FPU-->>Main: Elapsed RDTSC Cycles (C)
-
-    Note over Main: Compute Ratios:<br/>(A / B) and (A / C)
-```
+![Per-Chip Silicon Fingerprinting](assets/cpu_fingerprinting.png)
 
 ### Ratios Cancel Frequency Interference
 
