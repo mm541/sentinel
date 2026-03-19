@@ -15,16 +15,20 @@ pub fn get_motherboard_serial() -> Option<String> {
 pub fn get_drive_serials() -> Vec<String> {
     let mut serials = Vec::new();
     
-    // Run: lsblk -d -n -o SERIAL
+    // Run: lsblk -J -d -o MODEL,SERIAL
     if let Ok(output) = Command::new("lsblk")
-        .args(["-d", "-n", "-o", "SERIAL"])
+        .args(["-J", "-d", "-o", "MODEL,SERIAL"])
         .output() 
     {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                serials.push(trimmed.to_string());
+        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+            if let Some(blockdevices) = json.get("blockdevices").and_then(|b| b.as_array()) {
+                for dev in blockdevices {
+                    let serial = dev.get("serial").and_then(|s| s.as_str()).unwrap_or("").trim();
+                    let model = dev.get("model").and_then(|m| m.as_str()).unwrap_or("Unknown Drive").trim();
+                    if !serial.is_empty() {
+                        serials.push(format!("{} (S/N: {})", model, serial));
+                    }
+                }
             }
         }
     }
@@ -49,10 +53,12 @@ pub fn get_mac_addresses() -> Vec<String> {
             }
             
             let mac_path = path.join("address");
+            let iface_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            
             if let Ok(mac) = fs::read_to_string(mac_path) {
                 let trimmed_mac = mac.trim().to_string();
                 if !trimmed_mac.is_empty() && trimmed_mac != "00:00:00:00:00:00" {
-                    macs.push(trimmed_mac);
+                    macs.push(format!("{} [{}]", iface_name, trimmed_mac.to_uppercase()));
                 }
             }
         }
@@ -66,19 +72,34 @@ pub fn get_mac_addresses() -> Vec<String> {
 pub fn get_ram_serials() -> Vec<String> {
     let mut serials = Vec::new();
     
+    let mut current_manufacturer = String::from("Unknown");
+    let mut current_locator = String::from("Unknown");
+    let mut current_part = String::new();
+    
     // Run: dmidecode -t memory
     if let Ok(output) = Command::new("dmidecode").args(["-t", "memory"]).output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         
         for line in stdout.lines() {
             let trimmed = line.trim();
-            if trimmed.starts_with("Serial Number:") {
+            if trimmed.starts_with("Locator:") {
+                current_locator = trimmed.replace("Locator:", "").trim().to_string();
+            } else if trimmed.starts_with("Manufacturer:") {
+                current_manufacturer = trimmed.replace("Manufacturer:", "").trim().to_string();
+            } else if trimmed.starts_with("Part Number:") {
+                current_part = trimmed.replace("Part Number:", "").trim().to_string();
+            } else if trimmed.starts_with("Serial Number:") {
                 let serial = trimmed.replace("Serial Number:", "").trim().to_string();
                 
                 // Filter out empty slots or generic manufacturer filler data
                 if !serial.is_empty() && serial != "Not Specified" && serial != "Unknown" {
-                    serials.push(serial);
+                    serials.push(format!("{} {} {} (S/N: {})", current_manufacturer, current_part, current_locator, serial));
                 }
+                
+                // Reset for next DIMM block
+                current_manufacturer = String::from("Unknown");
+                current_locator = String::from("Unknown");
+                current_part = String::new();
             }
         }
     }
@@ -132,17 +153,17 @@ pub fn get_gpu_uuids() -> Vec<String> {
         }
     }
 
-    // ── Strategy 2: nvidia-smi (NVIDIA-specific, gives true per-chip UUID) ──
+    // ── Strategy 2: nvidia-smi (NVIDIA-specific, gives descriptive string with UUID) ──
     if let Ok(output) = Command::new("nvidia-smi").arg("-L").output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
-                if let Some(start_idx) = line.find("UUID: ") {
-                    if let Some(end_idx) = line[start_idx..].find(')') {
-                        let uuid = line[start_idx + 6..start_idx + end_idx].to_string();
-                        if !ids.contains(&uuid) {
-                            ids.push(uuid);
-                        }
+                let trimmed = line.trim();
+                // e.g. "GPU 0: NVIDIA GeForce RTX 3080 (UUID: GPU-abcd...)"
+                if !trimmed.is_empty() {
+                    let desc = trimmed.to_string();
+                    if !ids.iter().any(|existing| desc.contains(existing) || existing.contains(&desc)) {
+                        ids.push(desc);
                     }
                 }
             }
