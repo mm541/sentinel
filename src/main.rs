@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         }
         Commands::Distribution => {
             use std::collections::HashMap;
-            println!("➤ {}...", "Profiling CPU Fingerprint Stability (100 runs)".yellow());
+            println!("➤ {}...", "Profiling CPU Fingerprint Stability (500 runs)".yellow());
             
             if let Some(core_ids) = core_affinity::get_core_ids() {
                 if let Some(first_core) = core_ids.first() {
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
             }
 
             let mut tally: HashMap<u64, usize> = HashMap::new();
-            let rounds = 100;
+            let rounds = 500;
 
             for _ in 0..rounds {
                 let sig = sys_info::get_cpu_timing_signature();
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
             }
 
             if let Some((best_sig, best_count)) = sorted_tally.first() {
-                println!("\n{} Majority signature is 0x{:016X} with {}/100 occurrences.\n", "✅".green(), best_sig, best_count);
+                println!("\n{} Majority signature is 0x{:016X} with {}/{} occurrences.\n", "✅".green(), best_sig, best_count, rounds);
             }
         }
     }
