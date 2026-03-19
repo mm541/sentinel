@@ -33,6 +33,8 @@ enum Commands {
         #[arg(required = true)]
         file: String,
     },
+    /// Profiles the CPU fingerprint logic over 100 runs and prints the distribution percentages
+    Distribution,
 }
 
 fn main() -> Result<()> {
@@ -71,6 +73,39 @@ fn main() -> Result<()> {
             } else {
                 eprintln!("\n{} Hardware modification detected! Integrity compromised.\n", "❌ FAIL:".red().bold());
                 exit(1);
+            }
+        }
+        Commands::Distribution => {
+            use std::collections::HashMap;
+            println!("➤ {}...", "Profiling CPU Fingerprint Stability (100 runs)".yellow());
+            
+            if let Some(core_ids) = core_affinity::get_core_ids() {
+                if let Some(first_core) = core_ids.first() {
+                    core_affinity::set_for_current(*first_core);
+                }
+            }
+
+            let mut tally: HashMap<u64, usize> = HashMap::new();
+            let rounds = 100;
+
+            for _ in 0..rounds {
+                let sig = sys_info::get_cpu_timing_signature();
+                *tally.entry(sig).or_insert(0) += 1;
+            }
+
+            let mut sorted_tally: Vec<_> = tally.into_iter().collect();
+            sorted_tally.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
+            
+            println!("\n📊 {}", "Distribution Results:".bold().cyan());
+            for (sig, count) in &sorted_tally {
+                let percentage = (*count as f64 / rounds as f64) * 100.0;
+                let bar_len = (*count as usize) / 2; // scale by half for bar
+                let bar = "█".repeat(bar_len);
+                println!("  0x{:016X} | {:6.1}% | {}", sig, percentage, bar.green());
+            }
+
+            if let Some((best_sig, best_count)) = sorted_tally.first() {
+                println!("\n{} Majority signature is 0x{:016X} with {}/100 occurrences.\n", "✅".green(), best_sig, best_count);
             }
         }
     }
