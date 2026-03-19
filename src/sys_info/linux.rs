@@ -201,6 +201,14 @@ fn read_sysfs_hex(path: &std::path::Path) -> Option<String> {
 /// the most frequent result (mode/majority vote) to eliminate OS-level noise.
 pub fn get_robust_cpu_timing_signature(rounds: usize) -> u64 {
     use std::collections::HashMap;
+
+    // Pin the thread to the first CPU core to prevent the OS scheduler from migrating
+    // us to an E-core or a core with different thermal/frequency characteristics mid-flight.
+    if let Some(core_ids) = core_affinity::get_core_ids() {
+        if let Some(first_core) = core_ids.first() {
+            core_affinity::set_for_current(*first_core);
+        }
+    }
     
     let mut tally: HashMap<u64, usize> = HashMap::with_capacity( rounds / 2 );
 

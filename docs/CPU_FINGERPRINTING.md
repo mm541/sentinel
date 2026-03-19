@@ -24,9 +24,10 @@ Because multitasking OSes (Windows, macOS, Linux) constantly interrupt threads f
 
 Sentinel prevents this using a 100-run voting system:
 
-1. Fire 100 consecutive measurement sweeps
-2. Inside each sweep, collect thousands of iterations and resolve the median
-3. Quantize the ratios into coarse logical bins (buckets) to absorb ±5% temperature jitter
-4. Select the final signature that appears most frequently (mode) across the 100 runs
+1. **Thread Affinitization:** Pin the measuring thread strictly to physical Core 0 to prevent P-core/E-core migration or cache-invalidation mid-measurement.
+2. Fire 100 consecutive measurement sweeps
+3. Inside each sweep, collect thousands of iterations and resolve the median
+4. Quantize the ratios into coarse logical bins (buckets) to absorb ±5% temperature jitter
+5. Select the final signature that appears most frequently (mode) across the 100 runs
 
 The final 64-bit signature hashes the deterministic CPU model string and the stable timing ratio buckets to generate a persistent **per-chip unique hardware token**.
