@@ -381,8 +381,104 @@ fn cpuinfo_model_hash() -> u64 {
     hasher.finish()
 }
 
-/// Fallback for non-x86_64 architectures — uses only /proc/cpuinfo hash.
-#[cfg(not(target_arch = "x86_64"))]
+/// Measures the median AArch64 internal timer tick count for a given workload.
+/// Uses Instruction Synchronization Barriers (`isb sy`) to serialize execution.
+#[cfg(target_arch = "aarch64")]
+fn measure_median<F: Fn()>(rounds: usize, workload: F) -> u64 {
+    use std::arch::asm;
+
+    let mut timings = Vec::with_capacity(rounds);
+
+    for _ in 0..rounds {
+        unsafe {
+            let start: u64;
+            let end: u64;
+
+            // ISB guarantees that instructions preceding the ISB execute before the timer read
+            asm!("isb sy");
+            asm!("mrs {}, cntvct_el0", out(reg) start);
+
+            workload();
+
+            asm!("isb sy");
+            asm!("mrs {}, cntvct_el0", out(reg) end);
+
+            timings.push(end.wrapping_sub(start));
+        }
+    }
+
+    timings.sort();
+    timings[rounds / 2]
+}
+
+/// AArch64 implementation of deep silicon fingerprinting via Virtual Timers (`cntvct_el0`).
+/// Works on Snapdragon, Apple M-Series (macOS/Asahi), and AWS Graviton.
+#[cfg(target_arch = "aarch64")]
+pub fn get_cpu_timing_signature() -> u64 {
+    const ROUNDS: usize = 2001; 
+    const CHAIN_LEN: usize = 1000;
+    const PASSES: usize = 5; 
+
+    // Warmup processor
+    for _ in 0..1000 {
+        std::hint::black_box(0);
+    }
+
+    let mut ratio_a_samples: Vec<u64> = Vec::with_capacity(PASSES);
+    let mut ratio_b_samples: Vec<u64> = Vec::with_capacity(PASSES);
+
+    for _ in 0..PASSES {
+        let t_mul = measure_median(ROUNDS, || {
+            let mut x: u64 = 0xDEAD_BEEF_CAFE_BABE;
+            for _ in 0..CHAIN_LEN {
+                x = x.wrapping_mul(6364136223846793005);
+            }
+            std::hint::black_box(x);
+        });
+
+        let t_div = measure_median(ROUNDS, || {
+            let mut x: u64 = 0xFFFF_FFFF_FFFF_FFFE;
+            for _ in 0..CHAIN_LEN {
+                x = x / 3;
+                x |= 0x8000_0000_0000_0000; 
+            }
+            std::hint::black_box(x);
+        });
+
+        let t_fp = measure_median(ROUNDS, || {
+            let mut x: f64 = 1.0000001;
+            for _ in 0..CHAIN_LEN {
+                x = x * 1.0000001 + 0.0000001;
+            }
+            std::hint::black_box(x);
+        });
+
+        if t_div > 0 {
+            ratio_a_samples.push((t_mul as f64 / t_div as f64 * 10000.0) as u64);
+        }
+        if t_fp > 0 {
+            ratio_b_samples.push((t_mul as f64 / t_fp as f64 * 10000.0) as u64);
+        }
+    }
+
+    ratio_a_samples.sort();
+    ratio_b_samples.sort();
+
+    let r_mul_div = *ratio_a_samples.get(PASSES / 2).unwrap_or(&0);
+    let r_mul_fp = *ratio_b_samples.get(PASSES / 2).unwrap_or(&0);
+
+    let bucket_a = (r_mul_div + 50) / 100;
+    let bucket_b = (r_mul_fp + 75) / 150;
+
+    let mut hasher = DefaultHasher::new();
+    bucket_a.hash(&mut hasher);
+    bucket_b.hash(&mut hasher);
+    cpuinfo_model_hash().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Fallback for unknown architectures (e.g. RISC-V, older ARM32) — uses only /proc/cpuinfo hash.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 pub fn get_cpu_timing_signature() -> u64 {
     cpuinfo_model_hash()
 }
