@@ -267,9 +267,7 @@ pub fn get_cpu_timing_signature() -> u64 {
 
     // ── Warmup: bring CPU out of deep C-state ──
     for _ in 0..1000 {
-        unsafe {
-            std::hint::black_box(__cpuid(0));
-        }
+        std::hint::black_box(__cpuid(0));
     }
 
     // 6 ratio collectors: mul/div, mul/fp, mul/aes, div/fp, div/aes, fp/aes
