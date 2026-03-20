@@ -77,35 +77,70 @@ fn main() -> Result<()> {
         }
         Commands::Distribution => {
             use std::collections::HashMap;
-            println!("➤ {}...", "Profiling CPU Fingerprint Stability (500 runs)".yellow());
-            
-            if let Some(core_ids) = core_affinity::get_core_ids() {
-                if let Some(first_core) = core_ids.first() {
-                    core_affinity::set_for_current(*first_core);
+
+            let core_ids = core_affinity::get_core_ids().unwrap_or_default();
+            let num_cores = core_ids.len();
+
+            println!("➤ {}...", format!("Per-Core CPU Fingerprint Analysis ({} cores detected)", num_cores).yellow());
+            println!("{}", "━".repeat(70));
+
+            let runs_per_core = 10;
+            let mut core_results: Vec<(usize, u64)> = Vec::new();
+
+            for (i, core_id) in core_ids.iter().enumerate() {
+                // Pin thread to this specific core
+                core_affinity::set_for_current(*core_id);
+
+                let mut tally: HashMap<u64, usize> = HashMap::new();
+                for _ in 0..runs_per_core {
+                    let sig = sys_info::get_cpu_timing_signature();
+                    *tally.entry(sig).or_insert(0) += 1;
                 }
+
+                // Get the majority signature for this core
+                let (best_sig, best_count) = tally.into_iter()
+                    .max_by_key(|&(_, count)| count)
+                    .unwrap_or((0, 0));
+
+                println!("  Core {:>2}  │  0x{:016X}  │  {}/{} stable",
+                    i, best_sig, best_count, runs_per_core);
+
+                core_results.push((i, best_sig));
             }
 
-            let mut tally: HashMap<u64, usize> = HashMap::new();
-            let rounds = 500;
+            // ── Summary: group cores by their signature ──
+            println!("\n{}", "━".repeat(70));
+            println!("📊 {}\n", "Cross-Core Summary:".bold().cyan());
 
-            for _ in 0..rounds {
-                let sig = sys_info::get_cpu_timing_signature();
-                *tally.entry(sig).or_insert(0) += 1;
+            let mut sig_groups: HashMap<u64, Vec<usize>> = HashMap::new();
+            for (core_idx, sig) in &core_results {
+                sig_groups.entry(*sig).or_default().push(*core_idx);
             }
 
-            let mut sorted_tally: Vec<_> = tally.into_iter().collect();
-            sorted_tally.sort_by_key(|&(_, count)| std::cmp::Reverse(count));
-            
-            println!("\n📊 {}", "Distribution Results:".bold().cyan());
-            for (sig, count) in &sorted_tally {
-                let percentage = (*count as f64 / rounds as f64) * 100.0;
-                let bar_len = (*count as usize) / 2; // scale by half for bar
-                let bar = "█".repeat(bar_len);
-                println!("  0x{:016X} | {:6.1}% | {}", sig, percentage, bar.green());
+            let mut sorted_groups: Vec<_> = sig_groups.into_iter().collect();
+            sorted_groups.sort_by_key(|(_, cores)| std::cmp::Reverse(cores.len()));
+
+            for (sig, cores) in &sorted_groups {
+                let core_list: Vec<String> = cores.iter().map(|c| format!("{}", c)).collect();
+                let pct = (cores.len() as f64 / num_cores as f64) * 100.0;
+                let label = if cores.len() == num_cores {
+                    "ALL CORES".green().bold().to_string()
+                } else {
+                    format!("{} cores", cores.len())
+                };
+                println!("  0x{:016X}  │  {:>5.1}%  │  {} [{}]",
+                    sig, pct, label, core_list.join(", "));
             }
 
-            if let Some((best_sig, best_count)) = sorted_tally.first() {
-                println!("\n{} Majority signature is 0x{:016X} with {}/{} occurrences.\n", "✅".green(), best_sig, best_count, rounds);
+            if sorted_groups.len() == 1 {
+                println!("\n{} {}\n",
+                    "✅".green(),
+                    "PERFECT: All cores produce the same chip-level signature!".green().bold());
+            } else {
+                println!("\n{} {}",
+                    "⚠️".yellow(),
+                    "HETEROGENEOUS: Different core types detected (e.g. P-cores vs E-cores).".yellow().bold());
+                println!("   This is expected on hybrid architectures like Intel 12th Gen+ (Alder Lake).\n");
             }
         }
     }
