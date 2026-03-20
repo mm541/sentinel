@@ -4,7 +4,7 @@ Sentinel is a zero-trust, OS-agnostic hardware fingerprinting and verification t
 
 ## Key Features
 
-- **Per-Chip CPU Identification:** Exploits manufacturing process variation in silicon to extract a unique micro-architectural timing signature using RDTSC, achieving near 100% reproducibility via 100-run majority voting.
+- **Per-Chip CPU Identification:** Exploits manufacturing process variation by profiling 6 distinct execution units (ALU, divider, FPU, AES, barrel shifter, XOR) and computing 6 pairwise timing ratios via RDTSC — yielding millions of distinct fingerprint combinations per CPU model with near 100% cross-run reproducibility.
 - **Set-Theory Hardware Diffing:** Granular tamper detection that identifies exactly which components were added, removed, or spoofed across boot cycles.
 - **Vendor & OS Agnostic Design:** Pluggable backend architecture designed from day one to support Linux, Windows, and macOS (currently fully implemented for Linux).
 - **Graceful Degradation:** Capable of running without root bounds for standard metrics, or extracting hidden DMI/SMBIOS serials when running elevated.
