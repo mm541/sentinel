@@ -1,0 +1,81 @@
+name: CPU Fingerprint Cross-Host Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fingerprint:
+    name: "Host ${{ matrix.run }}"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        run: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Collect CPU Info
+        run: |
+          echo "::group::CPU Model"
+          grep "model name" /proc/cpuinfo | head -1
+          echo "::endgroup::"
+
+      - name: Run Fingerprint
+        run: |
+          sudo ./target/release/sentinel generate /tmp/manifest.json
+          echo ""
+          echo "═══════════════════════════════════════════════"
+          echo "  CPU Timing Signature (Host ${{ matrix.run }}):"
+          echo "  $(cat /tmp/manifest.json | python3 -c 'import sys,json; d=json.load(sys.stdin); print(hex(d["cpu_timing_signature"]))')"
+          echo "═══════════════════════════════════════════════"
+
+      - name: Upload Manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-host-${{ matrix.run }}
+          path: /tmp/manifest.json
+
+  compare:
+    name: Compare Results
+    needs: fingerprint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all manifests
+        uses: actions/download-artifact@v4
+        with:
+          path: manifests
+
+      - name: Compare CPU signatures
+        run: |
+          echo "╔═══════════════════════════════════════════════════╗"
+          echo "║        CPU Fingerprint Cross-Host Results        ║"
+          echo "╠═══════════════════════════════════════════════════╣"
+
+          signatures=()
+          for dir in manifests/manifest-host-*/; do
+            host=$(basename "$dir" | sed 's/manifest-host-//')
+            sig=$(python3 -c "import json; d=json.load(open('${dir}manifest.json')); print(hex(d['cpu_timing_signature']))")
+            echo "║  Host $host:  $sig"
+            signatures+=("$sig")
+          done
+
+          echo "╠═══════════════════════════════════════════════════╣"
+
+          unique=$(printf '%s\n' "${signatures[@]}" | sort -u | wc -l)
+          total=${#signatures[@]}
+
+          if [ "$unique" -eq 1 ]; then
+            echo "║  ⚠️  All $total hosts produced the SAME hash."
+            echo "║  This may indicate RDTSC virtualization or"
+            echo "║  all jobs landed on the same physical host."
+            echo "╚═══════════════════════════════════════════════════╝"
+          else
+            echo "║  ✅ $unique distinct signatures from $total hosts!"
+            echo "║  Different physical chips → different fingerprints."
+            echo "╚═══════════════════════════════════════════════════╝"
+          fi
