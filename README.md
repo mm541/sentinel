@@ -53,4 +53,16 @@ For deep technical dives into how Sentinel's anti-cheat/anti-tamper mechanics wo
 
 ## Contributing
 
-Sentinel accepts PRs for Windows (`sys_info/windows.rs`) and macOS (`sys_info/macos.rs`) implementations! Please ensure all new modules conform to the generic traits established in the core engine.
+Contributions are welcome! Check the **[Roadmap & Feature Wishlist](docs/ROADMAP.md)** for contributor-friendly tasks with difficulty ratings and implementation hints.
+
+**How to contribute:**
+1. Pick a feature from the [Roadmap](docs/ROADMAP.md) (or propose your own)
+2. Open an issue to discuss your approach
+3. Fork, implement, and submit a PR
+
+**Platform backends** — `sys_info/windows.rs` and `sys_info/macos.rs` are especially welcome. The `sys_info/mod.rs` module already supports conditional compilation per OS.
+
+**New hardware vectors** should follow the established pattern:
+- Collection function in `sys_info/<platform>.rs`
+- Field in `HardwareManifest` struct (`manifest.rs`)
+- Display + diff reporting in `main.rs`
