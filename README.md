@@ -49,6 +49,7 @@ For deep technical dives into how Sentinel's anti-cheat/anti-tamper mechanics wo
 - [System Architecture](docs/ARCHITECTURE.md) - Explains the high-level design and OS-agnostic hardware abstraction layer.
 - [Verification Engine](docs/VERIFICATION_ENGINE.md) - Details the set-theory mechanics behind the ManifestDiff tamper detection system.
 - [Per-Chip Silicon Fingerprinting](docs/CPU_FINGERPRINTING.md) - Explains how Sentinel breaks the "identical CPU" barrier using RDTSC timing variance.
+- [Roadmap & Feature Wishlist](docs/ROADMAP.md) - Planned features and contributor-friendly tasks with difficulty ratings.
 
 ## Contributing
 
