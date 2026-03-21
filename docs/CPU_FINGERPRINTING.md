@@ -52,6 +52,8 @@ bucket = (ratio + 40) / 80
 
 With 6 ratios and ~12 distinct buckets each, this yields **~millions of distinct combinations** — compared to ~150 in the original 2-ratio design.
 
+The raw bucket values are stored directly in the manifest (e.g., `[88, 75, 33, 474, 552, 1249]`) rather than hashed into a single number. This enables **fuzzy verification** — each bucket is allowed to differ by ±1 during comparison, absorbing boundary jitter without sacrificing uniqueness.
+
 ### The 100-Run Majority Vote Filter
 
 Because multitasking OSes constantly interrupt threads for system scheduling, raw timing metrics are occasionally disrupted.
@@ -62,8 +64,28 @@ Sentinel prevents this using a 100-run voting system:
 2. Fire 100 consecutive measurement sweeps.
 3. Inside each sweep, collect 2001 iterations per workload across 5 passes and resolve the **double-median** (median of samples, then median of ratios across passes).
 4. Quantize the 6 ratios into logical bins (buckets) to absorb thermal and scheduling jitter.
-5. Hash all 6 buckets with the CPU model hash from `/proc/cpuinfo`.
-6. Select the final 64-bit signature that appears most frequently (mode) across the 100 runs.
+5. **Per-bucket majority vote:** For each of the 6 ratio slots independently, select the bucket value that appears most frequently across the 100 runs.
+6. Store the resulting 6-element bucket array as the CPU timing signature.
+
+### Fuzzy Verification (±1 Tolerance)
+
+During verification, each of the 6 stored buckets is compared against the live scan. A bucket is considered matching if it differs by **at most ±1** from the baseline value. This eliminates false positives from boundary jitter while still detecting genuinely different CPUs (which differ by many buckets).
+
+### CPU Identity Fields
+
+In addition to the timing signature, Sentinel stores stable CPU identity fields parsed from `/proc/cpuinfo`:
+
+| Field | Example | Purpose |
+|-------|---------|----------|
+| `model_name` | 12th Gen Intel Core i7-12700H | Human-readable chip name |
+| `cpu_family` | 6 | Architecture family |
+| `model` | 154 | Specific model number |
+| `stepping` | 3 | Silicon revision |
+| `microcode` | 0x43b | Firmware version |
+| `cache_size` | 24576 KB | L3 cache |
+| `cpuid_level` | 32 | Max CPUID leaf |
+
+These fields detect CPU swaps (different model/stepping) with exact matching, complementing the timing signature which detects per-chip differences within the same model.
 
 ### Architecture Support
 
@@ -71,6 +93,6 @@ Sentinel prevents this using a 100-run voting system:
 |-------------|-------|---------------|-------------|
 | x86_64 | `RDTSC` | `CPUID` barrier | `_mm_aesenc_si128` (AES-NI) |
 | AArch64 | `cntvct_el0` | `ISB SY` barrier | Integer add chain (fallback) |
-| Other | — | — | Fallback to `/proc/cpuinfo` hash only |
+| Other | — | — | Fallback: returns zero buckets |
 
-The final 64-bit signature hashes the deterministic CPU model string and the stable timing ratio buckets to generate a persistent **per-chip hardware token**.
+The final output is a **6-element array of bucket values** stored directly in the manifest JSON, enabling transparent inspection and fuzzy per-bucket verification.

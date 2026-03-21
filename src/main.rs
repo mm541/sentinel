@@ -85,24 +85,25 @@ fn main() -> Result<()> {
             println!("{}", "━".repeat(70));
 
             let runs_per_core = 10;
-            let mut core_results: Vec<(usize, u64)> = Vec::new();
+            let mut core_results: Vec<(usize, String)> = Vec::new();
 
             for (i, core_id) in core_ids.iter().enumerate() {
                 // Pin thread to this specific core
                 core_affinity::set_for_current(*core_id);
 
-                let mut tally: HashMap<u64, usize> = HashMap::new();
+                let mut tally: HashMap<String, usize> = HashMap::new();
                 for _ in 0..runs_per_core {
                     let sig = sys_info::get_cpu_timing_signature();
-                    *tally.entry(sig).or_insert(0) += 1;
+                    let sig_key = sig.iter().map(|b| format!("{}", b)).collect::<Vec<_>>().join("-");
+                    *tally.entry(sig_key).or_insert(0) += 1;
                 }
 
                 // Get the majority signature for this core
                 let (best_sig, best_count) = tally.into_iter()
                     .max_by_key(|&(_, count)| count)
-                    .unwrap_or((0, 0));
+                    .unwrap_or((String::from("0"), 0));
 
-                println!("  Core {:>2}  │  0x{:016X}  │  {}/{} stable",
+                println!("  Core {:>2}  │  [{}]  │  {}/{} stable",
                     i, best_sig, best_count, runs_per_core);
 
                 core_results.push((i, best_sig));
@@ -112,9 +113,9 @@ fn main() -> Result<()> {
             println!("\n{}", "━".repeat(70));
             println!("📊 {}\n", "Cross-Core Summary:".bold().cyan());
 
-            let mut sig_groups: HashMap<u64, Vec<usize>> = HashMap::new();
+            let mut sig_groups: HashMap<String, Vec<usize>> = HashMap::new();
             for (core_idx, sig) in &core_results {
-                sig_groups.entry(*sig).or_default().push(*core_idx);
+                sig_groups.entry(sig.clone()).or_default().push(*core_idx);
             }
 
             let mut sorted_groups: Vec<_> = sig_groups.into_iter().collect();
@@ -128,7 +129,7 @@ fn main() -> Result<()> {
                 } else {
                     format!("{} cores", cores.len())
                 };
-                println!("  0x{:016X}  │  {:>5.1}%  │  {} [{}]",
+                println!("  [{}]  │  {:>5.1}%  │  {} [{}]",
                     sig, pct, label, core_list.join(", "));
             }
 
@@ -152,7 +153,8 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 fn collect_hardware_manifest() -> HardwareManifest {
     let motherboard_serial = sys_info::get_motherboard_serial();
-    let cpu_timing_signature = sys_info::get_robust_cpu_timing_signature(100);
+    let cpu_info = sys_info::get_cpu_info();
+    let cpu_timing_signature = sys_info::get_robust_cpu_timing_signature(100).to_vec();
     let ram_serials = sys_info::get_ram_serials();
     let drive_serials = sys_info::get_drive_serials();
     let gpu_uuids = sys_info::get_gpu_uuids();
@@ -166,7 +168,9 @@ fn collect_hardware_manifest() -> HardwareManifest {
     if let Some(ref serial) = motherboard_serial {
         serial.hash(&mut hasher);
     }
-    cpu_timing_signature.hash(&mut hasher);
+    for bucket in &cpu_timing_signature {
+        bucket.hash(&mut hasher);
+    }
     for mac in &mac_addresses {
         mac.hash(&mut hasher);
     }
@@ -175,6 +179,7 @@ fn collect_hardware_manifest() -> HardwareManifest {
     HardwareManifest {
         machine_id,
         motherboard_serial,
+        cpu_info,
         cpu_timing_signature,
         ram_serials,
         drive_serials,
@@ -191,7 +196,15 @@ fn print_manifest(manifest: &HardwareManifest) {
         None    => println!("  Motherboard Serial : {}", "⚠ Not available".yellow()),
     }
 
-    println!("  CPU Signature      : 0x{:016X}", manifest.cpu_timing_signature);
+    println!("  CPU Model          : {}", manifest.cpu_info.model_name.cyan());
+    println!("  CPU Family/Model   : {}/{}", manifest.cpu_info.cpu_family, manifest.cpu_info.model);
+    println!("  Stepping           : {}", manifest.cpu_info.stepping);
+    println!("  Microcode          : {}", manifest.cpu_info.microcode);
+    println!("  Cache Size         : {}", manifest.cpu_info.cache_size);
+    println!("  CPUID Level        : {}", manifest.cpu_info.cpuid_level);
+
+    let buckets_str: Vec<String> = manifest.cpu_timing_signature.iter().map(|b| format!("{}", b)).collect();
+    println!("  CPU Signature      : [{}]", buckets_str.join(", "));
 
     if manifest.ram_serials.is_empty() {
         println!("  RAM Serials        : {}", "⚠ None found".yellow());
@@ -237,13 +250,32 @@ fn print_diff_report(diff: &manifest::ManifestDiff) {
          }
     }
 
-    // CPU
+    // CPU Info
+    match &diff.cpu_info {
+         DiffStatus::Unchanged => println!("  [{}] CPU Info", "OK  ".green()),
+         DiffStatus::Modified { expected, actual } => {
+             println!("  [{}] CPU Info", "MOD ".red());
+             if expected.model_name != actual.model_name {
+                 println!("      Model: {} → {}", expected.model_name.red(), actual.model_name.green());
+             }
+             if expected.stepping != actual.stepping {
+                 println!("      Stepping: {} → {}", expected.stepping.red(), actual.stepping.green());
+             }
+             if expected.microcode != actual.microcode {
+                 println!("      Microcode: {} → {}", expected.microcode.red(), actual.microcode.green());
+             }
+         }
+    }
+
+    // CPU Timing
     match &diff.cpu {
          DiffStatus::Unchanged => println!("  [{}] CPU Timing Signature", "OK  ".green()),
          DiffStatus::Modified { expected, actual } => {
              println!("  [{}] CPU Timing Signature", "MOD ".red());
-             println!("      Expected: 0x{:016X}", expected);
-             println!("      Actual:   0x{:016X}", actual);
+             let exp_str: Vec<String> = expected.iter().map(|b| format!("{}", b)).collect();
+             let act_str: Vec<String> = actual.iter().map(|b| format!("{}", b)).collect();
+             println!("      Expected: [{}]", exp_str.join(", "));
+             println!("      Actual:   [{}]", act_str.join(", "));
          }
     }
 

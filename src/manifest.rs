@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 pub struct HardwareManifest {
     pub machine_id: String,
     pub motherboard_serial: Option<String>,
-    pub cpu_timing_signature: u64,
+    pub cpu_info: crate::sys_info::linux::CpuInfo,
+    pub cpu_timing_signature: Vec<u64>,
     pub ram_serials: Vec<String>,
     pub drive_serials: Vec<String>,
     pub gpu_uuids: Vec<String>,
@@ -37,7 +38,8 @@ impl CollectionDiff {
 pub struct ManifestDiff {
     pub is_identical: bool,
     pub motherboard: DiffStatus<Option<String>>,
-    pub cpu: DiffStatus<u64>,
+    pub cpu_info: DiffStatus<crate::sys_info::linux::CpuInfo>,
+    pub cpu: DiffStatus<Vec<u64>>,
     pub ram: CollectionDiff,
     pub drives: CollectionDiff,
     pub gpus: CollectionDiff,
@@ -74,12 +76,26 @@ impl HardwareManifest {
             }
         };
 
-        let cpu_diff = if self.cpu_timing_signature == live.cpu_timing_signature {
+        let cpu_info_diff = if self.cpu_info == live.cpu_info {
             DiffStatus::Unchanged
         } else {
             DiffStatus::Modified {
-                expected: self.cpu_timing_signature,
-                actual: live.cpu_timing_signature,
+                expected: self.cpu_info.clone(),
+                actual: live.cpu_info.clone(),
+            }
+        };
+
+        // CPU: fuzzy compare — allow each bucket to differ by at most ±1
+        let cpu_diff = if self.cpu_timing_signature.len() == live.cpu_timing_signature.len()
+            && self.cpu_timing_signature.iter().zip(live.cpu_timing_signature.iter()).all(|(&a, &b)| {
+                a.abs_diff(b) <= 1
+            })
+        {
+            DiffStatus::Unchanged
+        } else {
+            DiffStatus::Modified {
+                expected: self.cpu_timing_signature.clone(),
+                actual: live.cpu_timing_signature.clone(),
             }
         };
 
@@ -89,6 +105,7 @@ impl HardwareManifest {
         let mac_diff = Self::compare_collections(&self.mac_addresses, &live.mac_addresses);
 
         let is_identical = mobo_diff == DiffStatus::Unchanged
+            && cpu_info_diff == DiffStatus::Unchanged
             && cpu_diff == DiffStatus::Unchanged
             && ram_diff.is_identical()
             && drive_diff.is_identical()
@@ -98,6 +115,7 @@ impl HardwareManifest {
         ManifestDiff {
             is_identical,
             motherboard: mobo_diff,
+            cpu_info: cpu_info_diff,
             cpu: cpu_diff,
             ram: ram_diff,
             drives: drive_diff,

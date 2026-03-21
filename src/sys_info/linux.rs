@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::process::Command;
 
 /// Reads the motherboard serial directly from the DMI sysfs virtual file
@@ -198,8 +196,8 @@ fn read_sysfs_hex(path: &std::path::Path) -> Option<String> {
 }
 
 /// A robust wrapper that runs the timing analysis `rounds` times and returns
-/// the most frequent result (mode/majority vote) to eliminate OS-level noise.
-pub fn get_robust_cpu_timing_signature(rounds: usize) -> u64 {
+/// the most frequent bucket value per ratio slot (per-bucket majority vote).
+pub fn get_robust_cpu_timing_signature(rounds: usize) -> [u64; 6] {
     use std::collections::HashMap;
 
     // Pin the thread to the first CPU core to prevent the OS scheduler from migrating
@@ -209,19 +207,27 @@ pub fn get_robust_cpu_timing_signature(rounds: usize) -> u64 {
             core_affinity::set_for_current(*first_core);
         }
     }
-    
-    let mut tally: HashMap<u64, usize> = HashMap::with_capacity( rounds / 2 );
 
+    // Collect all runs
+    let mut all_runs: Vec<[u64; 6]> = Vec::with_capacity(rounds);
     for _ in 0..rounds {
-        let sig = get_cpu_timing_signature();
-        *tally.entry(sig).or_insert(0) += 1;
+        all_runs.push(get_cpu_timing_signature());
     }
 
-    // Find the signature with the highest frequency
-    tally.into_iter()
-         .max_by_key(|&(_, count)| count)
-         .map(|(sig, _)| sig)
-         .unwrap_or(0)
+    // Per-bucket majority vote: for each of the 6 slots, pick the most frequent value
+    let mut result = [0u64; 6];
+    for slot in 0..6 {
+        let mut tally: HashMap<u64, usize> = HashMap::new();
+        for run in &all_runs {
+            *tally.entry(run[slot]).or_insert(0) += 1;
+        }
+        result[slot] = tally.into_iter()
+            .max_by_key(|&(_, count)| count)
+            .map(|(val, _)| val)
+            .unwrap_or(0);
+    }
+
+    result
 }
 
 /// # CPU Silicon Fingerprint — Per-Chip Unique via Micro-Architectural Timing
@@ -255,7 +261,7 @@ pub fn get_robust_cpu_timing_signature(rounds: usize) -> u64 {
 /// - Bucket width 70 absorbs per-run jitter while remaining narrow enough for uniqueness
 /// - ~millions of distinct bucket combinations (vs ~150 in previous 2-ratio design)
 #[cfg(target_arch = "x86_64")]
-pub fn get_cpu_timing_signature() -> u64 {
+pub fn get_cpu_timing_signature() -> [u64; 6] {
     use std::arch::x86_64::{__cpuid, __m128i, _mm_aesenc_si128, _mm_set_epi64x};
 
     const ROUNDS: usize = 2001; // Samples per workload per pass (odd for clean median)
@@ -346,17 +352,15 @@ pub fn get_cpu_timing_signature() -> u64 {
     }
 
     // ── Take the median ratio from across all passes, then bucket ──
-    let mut hasher = DefaultHasher::new();
+    let mut buckets = [0u64; 6];
 
-    for ratio_samples in &mut ratios {
+    for (i, ratio_samples) in ratios.iter_mut().enumerate() {
         ratio_samples.sort();
         let median = *ratio_samples.get(PASSES / 2).unwrap_or(&0);
-        let bucket = (median + HALF_BUCKET) / BUCKET_WIDTH;
-        bucket.hash(&mut hasher);
+        buckets[i] = (median + HALF_BUCKET) / BUCKET_WIDTH;
     }
 
-    cpuinfo_model_hash().hash(&mut hasher);
-    hasher.finish()
+    buckets
 }
 
 /// Measures the median RDTSC cycle count for a given workload over `rounds` iterations.
@@ -386,31 +390,55 @@ fn measure_median<F: Fn()>(rounds: usize, workload: F) -> u64 {
     timings[rounds / 2]
 }
 
-/// Hashes stable /proc/cpuinfo fields to identify the CPU model (not per-chip unique).
-fn cpuinfo_model_hash() -> u64 {
-    let mut hasher = DefaultHasher::new();
+
+/// Stable CPU identity fields parsed from /proc/cpuinfo.
+/// These identify the CPU model (not per-chip unique) and are stored in the manifest.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CpuInfo {
+    pub model_name: String,
+    pub cpu_family: String,
+    pub model: String,
+    pub stepping: String,
+    pub microcode: String,
+    pub cache_size: String,
+    pub cpuid_level: String,
+}
+
+/// Reads stable CPU identity fields from /proc/cpuinfo (first logical core block).
+pub fn get_cpu_info() -> CpuInfo {
+    let mut info = CpuInfo {
+        model_name: String::new(),
+        cpu_family: String::new(),
+        model: String::new(),
+        stepping: String::new(),
+        microcode: String::new(),
+        cache_size: String::new(),
+        cpuid_level: String::new(),
+    };
 
     if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+        // Only parse the first processor block
         let first_block = cpuinfo.split("\n\n").next().unwrap_or(&cpuinfo);
-        let stable_fields = [
-            "model name",
-            "cpu family",
-            "model",
-            "stepping",
-            "microcode",
-            "cache size",
-            "cpuid level",
-        ];
+
         for line in first_block.lines() {
-            for field in &stable_fields {
-                if line.starts_with(field) {
-                    line.hash(&mut hasher);
+            if let Some((key, value)) = line.split_once(':') {
+                let key = key.trim();
+                let value = value.trim().to_string();
+                match key {
+                    "model name" => info.model_name = value,
+                    "cpu family" => info.cpu_family = value,
+                    "model" => info.model = value,
+                    "stepping" => info.stepping = value,
+                    "microcode" => info.microcode = value,
+                    "cache size" => info.cache_size = value,
+                    "cpuid level" => info.cpuid_level = value,
+                    _ => {}
                 }
             }
         }
     }
 
-    hasher.finish()
+    info
 }
 
 /// Measures the median AArch64 internal timer tick count for a given workload.
@@ -447,7 +475,7 @@ fn measure_median<F: Fn()>(rounds: usize, workload: F) -> u64 {
 /// Enhanced with 6 workloads for higher per-chip uniqueness.
 /// Works on Snapdragon, Apple M-Series (macOS/Asahi), and AWS Graviton.
 #[cfg(target_arch = "aarch64")]
-pub fn get_cpu_timing_signature() -> u64 {
+pub fn get_cpu_timing_signature() -> [u64; 6] {
     const ROUNDS: usize = 2001;
     const CHAIN_LEN: usize = 1000;
     const PASSES: usize = 5;
@@ -531,21 +559,19 @@ pub fn get_cpu_timing_signature() -> u64 {
         }
     }
 
-    let mut hasher = DefaultHasher::new();
+    let mut buckets = [0u64; 6];
 
-    for ratio_samples in &mut ratios {
+    for (i, ratio_samples) in ratios.iter_mut().enumerate() {
         ratio_samples.sort();
         let median = *ratio_samples.get(PASSES / 2).unwrap_or(&0);
-        let bucket = (median + HALF_BUCKET) / BUCKET_WIDTH;
-        bucket.hash(&mut hasher);
+        buckets[i] = (median + HALF_BUCKET) / BUCKET_WIDTH;
     }
 
-    cpuinfo_model_hash().hash(&mut hasher);
-    hasher.finish()
+    buckets
 }
 
-/// Fallback for unknown architectures (e.g. RISC-V, older ARM32) — uses only /proc/cpuinfo hash.
+/// Fallback for unknown architectures (e.g. RISC-V, older ARM32) — returns empty buckets.
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-pub fn get_cpu_timing_signature() -> u64 {
-    cpuinfo_model_hash()
+pub fn get_cpu_timing_signature() -> [u64; 6] {
+    [0u64; 6]
 }
